@@ -1,3 +1,5 @@
+// server.go
+
 package main
 
 import (
@@ -37,7 +39,6 @@ func handleConnection(conn net.Conn, cache *LRUCache, slabMgr *MultiSlabManager,
 		parts := strings.Split(line, " ")
 		cmd := strings.ToLower(parts[0])
 
-		
 		log.Printf("Received command from %s: %q\n", conn.RemoteAddr().String(), line)
 
 		switch cmd {
@@ -135,4 +136,3 @@ func handleConnection(conn net.Conn, cache *LRUCache, slabMgr *MultiSlabManager,
 		}
 	}
 }
-

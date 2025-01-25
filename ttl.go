@@ -6,15 +6,18 @@ import (
 )
 
 type TTLManager struct {
-	cache    *LRUCache
-	expireAt map[string]time.Time
-	mu       sync.RWMutex
+	cache     *LRUCache
+	skiplist  *SkipList
+	nodeByKey map[string]*skipListNode
+
+	mu sync.RWMutex
 }
 
 func NewTTLManager(cache *LRUCache) *TTLManager {
 	m := &TTLManager{
-		cache:    cache,
-		expireAt: make(map[string]time.Time),
+		cache:     cache,
+		skiplist:  NewSkipList(),
+		nodeByKey: make(map[string]*skipListNode),
 	}
 	go m.runCleaner()
 	return m
@@ -23,23 +26,34 @@ func NewTTLManager(cache *LRUCache) *TTLManager {
 func (m *TTLManager) SetExpire(key string, t time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.expireAt[key] = t
+
+	if oldNode, ok := m.nodeByKey[key]; ok {
+		m.skiplist.Remove(oldNode.expireAt, oldNode.key)
+	}
+
+	newNode, _ := m.skiplist.Insert(t, key)
+	m.nodeByKey[key] = newNode
 }
 
 func (m *TTLManager) DeleteExpire(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.expireAt, key)
+
+	if node, ok := m.nodeByKey[key]; ok {
+		m.skiplist.Remove(node.expireAt, node.key)
+		delete(m.nodeByKey, key)
+	}
 }
 
 func (m *TTLManager) IsExpired(key string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if t, ok := m.expireAt[key]; ok {
-		return time.Now().After(t)
+	node, ok := m.nodeByKey[key]
+	if !ok {
+		return false
 	}
-	return false
+	return time.Now().After(node.expireAt)
 }
 
 func (m *TTLManager) runCleaner() {
@@ -48,11 +62,22 @@ func (m *TTLManager) runCleaner() {
 
 	for range ticker.C {
 		now := time.Now()
+
 		m.mu.Lock()
-		for k, t := range m.expireAt {
-			if now.After(t) {
-				m.cache.Delete(k)
-				delete(m.expireAt, k)
+		for {
+			earliest := m.skiplist.GetEarliest()
+			if earliest == nil {
+				break
+			}
+			if earliest.expireAt.After(now) {
+
+				break
+			}
+			m.cache.Delete(earliest.key)
+
+			removed := m.skiplist.RemoveEarliest()
+			if removed != nil {
+				delete(m.nodeByKey, removed.key)
 			}
 		}
 		m.mu.Unlock()
